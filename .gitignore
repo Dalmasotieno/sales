@@ -1,0 +1,13 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python / Jupyter noise
+__pycache__/
+.ipynb_checkpoints/
+
+# Large or sensitive data files (optional, remove any you want to commit)
+*.dump
+*.pkl
+*.xlsx
