@@ -1,0 +1,59 @@
+{
+  "project": "Sales Forecasting for a Kenyan Baby Products Retailer",
+  "created_at": "2026-10-10T09:10:36",
+  "target": "Monthly total net_sales in KES, summed over all lines on the Africa/Nairobi calendar",
+  "frequency": "MS",
+  "training_period": [
+    "2020-11",
+    "2023-10"
+  ],
+  "n_training_months": 36,
+  "selected_model": "SARIMA(0,1,1)(0,1,1,12)",
+  "model_spec": {
+    "kind": "sarima",
+    "order": [
+      0,
+      1,
+      1
+    ],
+    "seasonal_order": [
+      0,
+      1,
+      1,
+      12
+    ]
+  },
+  "forecast_horizon_months": 3,
+  "interval": {
+    "method": "empirical: percentile of the selected model's rolling-origin absolute percentage errors",
+    "level": 0.8,
+    "half_width_pct": 0.25985714865025167
+  },
+  "evaluation": {
+    "test_period": [
+      "2023-08",
+      "2023-10"
+    ],
+    "test_wape_pct": 5.572620655159055,
+    "baseline_test_wape_pct": 37.89857036881005,
+    "improvement_vs_baseline_pct": 85.29596076862774,
+    "validation_wape_pct": 13.523242797491807,
+    "wape_target_pct": 15.0,
+    "improvement_target_pct": 10.0,
+    "wape_status": "PASS",
+    "improvement_status": "PASS"
+  },
+  "preprocessing_steps": [
+    "Convert UTC timestamps to Africa/Nairobi before extracting the month",
+    "Keep every transaction line (including returns, delivery charges and other lines) in net_sales",
+    "Flag delivery-rider charges; keep them in total net sales",
+    "Sum net_sales per Nairobi calendar month on a complete monthly grid (month-start index)",
+    "Do not remove valid sales spikes; do not impute missing months (none are missing)"
+  ],
+  "package_versions": {
+    "python": "3.11.16",
+    "pandas": "3.0.6",
+    "numpy": "2.4.6",
+    "statsmodels": "0.15.0"
+  }
+}
