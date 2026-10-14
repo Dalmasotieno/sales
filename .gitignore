@@ -15,8 +15,3 @@ __pycache__/
 *.db
 *.joblib
 app.log
-
-# Real sales results (keep demo files instead)
-artifacts/monthly_net_sales.csv
-artifacts/forecast_next_3_months.csv
-artifacts/category_forecast_next_3_months.csv

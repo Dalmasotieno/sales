@@ -25,7 +25,12 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def utcnow():
+    """Naive UTC timestamp (replaces deprecated datetime.utcnow)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 from sqlalchemy import (
     create_engine, MetaData, Table, Column, String, Integer, Float, DateTime,
     ForeignKey, select, update, insert, text, func
@@ -59,6 +64,7 @@ PROJECT_TITLE = "Sales Forecasting for a Kenyan Baby Products Retailer"
 ARTIFACT_DIR = Path(__file__).resolve().parent / "artifacts"
 CONFIG_PATH = ARTIFACT_DIR / "forecast_config.json"
 HISTORY_PATH = ARTIFACT_DIR / "monthly_net_sales.csv"
+DEMO_HISTORY_PATH = ARTIFACT_DIR / "demo_monthly_sales.csv"  # synthetic data for public demos
 
 MODEL_SPECS = {
     "Seasonal-Naive": {"kind": "snaive"},
@@ -97,10 +103,11 @@ def load_config():
 
 def load_history_from_artifact():
     """Load the monthly history exported by the notebook."""
-    if not HISTORY_PATH.exists():
+    path = HISTORY_PATH if HISTORY_PATH.exists() else DEMO_HISTORY_PATH
+    if not path.exists():
         return None
     try:
-        frame = pd.read_csv(HISTORY_PATH)
+        frame = pd.read_csv(path)
         if frame.empty:
             return None
 
@@ -212,6 +219,11 @@ def forecast_spec(model_name, history, horizon):
     return pd.Series(np.asarray(forecast, dtype=float), index=future_index, name="forecast")
 
 
+@st.cache_data(show_spinner="Fitting forecast model...")
+def cached_forecast(model_name, history, horizon):
+    return forecast_spec(model_name, history, horizon)
+
+
 def wape_percent(actual, predicted):
     """Calculate WAPE as a percentage."""
     actual = np.asarray(actual, dtype=float)
@@ -249,7 +261,8 @@ def get_database_url():
         elif url.startswith("postgresql://"):
             url = "postgresql+psycopg://" + url[len("postgresql://"):]
         return url, True
-    return "sqlite:///baby_retail_inventory.db", False
+    db_file = Path(__file__).resolve().parent / "baby_retail_inventory.db"
+    return f"sqlite:///{db_file.as_posix()}", False
 
 
 @st.cache_resource
@@ -322,7 +335,7 @@ def upsert_inventory_product(conn, products, row, update_existing_stock=False):
         "unit_cost_kes": float(row["unit_cost_kes"]),
         "safety_stock_units": int(row.get("safety_stock_units", 0)),
         "min_order_qty": max(1, int(row.get("min_order_qty", 1))),
-        "updated_at": datetime.utcnow(),
+        "updated_at": utcnow(),
     }
     if existing:
         if update_existing_stock:
@@ -401,7 +414,11 @@ if uploaded_file is not None:
         st.stop()
 elif artifact_history is not None:
     history = artifact_history
-    data_source_label = str(HISTORY_PATH.relative_to(Path(__file__).resolve().parent))
+    using_demo = not HISTORY_PATH.exists()
+    data_source_label = str((DEMO_HISTORY_PATH if using_demo else HISTORY_PATH).relative_to(Path(__file__).resolve().parent))
+    if using_demo:
+        st.warning("Demo mode: these sales figures are synthetic, for demonstration only. "
+                   "Upload your own monthly sales CSV in the sidebar to forecast real data.")
 else:
     st.info(
         "No notebook artifacts were found. Run the Deployment cells in your notebook "
@@ -441,7 +458,7 @@ with st.sidebar:
     )
 
 try:
-    forecast = forecast_spec(model_name, history, int(horizon))
+    forecast = cached_forecast(model_name, history, int(horizon))
     logger.info(
         "Forecast generated model=%s horizon=%s observations=%s latest_month=%s",
         model_name, int(horizon), len(history), history.index[-1].strftime("%Y-%m")
@@ -664,26 +681,36 @@ with tab_inventory:
                 elif movement_type != "Stock correction" and int(quantity) < 1:
                     st.error("Quantity must be at least 1 for sales, receipts, or damaged/expired stock.")
                 else:
-                    product_row = inventory.loc[inventory["sku"] == chosen_sku].iloc[0]
                     qty = int(quantity)
-                    if movement_type in ["Sale / stock issued", "Damaged / expired"]:
-                        delta = -qty
-                    elif movement_type == "Stock received":
-                        delta = qty
-                    else:
-                        # A correction means set the balance to the entered quantity.
-                        delta = qty - int(product_row["current_stock"])
-                    new_stock = int(product_row["current_stock"]) + delta
-                    if new_stock < 0:
-                        st.error(f"Cannot save this movement: available stock is {int(product_row['current_stock'])} units.")
-                    else:
+                    try:
+                        # Read the balance inside the transaction (row-locked on PostgreSQL)
+                        # so two users cannot overwrite each other's stock changes.
                         with engine.begin() as conn:
-                            conn.execute(update(products_table).where(products_table.c.sku == chosen_sku).values(current_stock=new_stock, updated_at=datetime.utcnow()))
+                            current = conn.execute(
+                                select(products_table.c.current_stock)
+                                .where(products_table.c.sku == chosen_sku)
+                                .with_for_update()
+                            ).scalar_one()
+                            current = int(current)
+                            if movement_type in ["Sale / stock issued", "Damaged / expired"]:
+                                delta = -qty
+                            elif movement_type == "Stock received":
+                                delta = qty
+                            else:
+                                # A correction means set the balance to the entered quantity.
+                                delta = qty - current
+                            new_stock = current + delta
+                            if new_stock < 0:
+                                raise ValueError(f"Cannot save this movement: available stock is {current} units.")
+                            conn.execute(update(products_table).where(products_table.c.sku == chosen_sku).values(current_stock=new_stock, updated_at=utcnow()))
                             conn.execute(insert(movements_table).values(
                                 sku=chosen_sku, movement_type=movement_type, quantity_delta=delta,
                                 reason=reason.strip(), reference=reference.strip() or None,
-                                created_at=datetime.utcnow()
+                                created_at=utcnow()
                             ))
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    else:
                         st.success(f"Stock updated. New balance: {new_stock} units.")
                         st.rerun()
 
@@ -826,7 +853,7 @@ with tab_operations:
                                 numeric_value=float(numeric_value) if numeric_value > 0 else None,
                                 reference=event_reference.strip() or None,
                                 notes=event_notes.strip(),
-                                created_at=datetime.utcnow(),
+                                created_at=utcnow(),
                             ))
                         logger.info("Business event recorded type=%s sku=%s", event_type, event_sku)
                         st.success("Business event saved.")
@@ -881,7 +908,7 @@ with tab_operations:
                             absolute_error_kes=float(absolute_error),
                             absolute_percentage_error=float(ape) if ape is not None else None,
                             notes=review_notes.strip() or None,
-                            created_at=datetime.utcnow(),
+                            created_at=utcnow(),
                         ))
                     logger.info("Forecast review saved month=%s", review_month)
                     st.success(f"Review saved. Absolute error: {format_kes(absolute_error)}.")
