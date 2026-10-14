@@ -2,17 +2,21 @@
 .env
 .env.*
 !.env.example
+.streamlit/secrets.toml
 
 # Python / Jupyter noise
 __pycache__/
 .ipynb_checkpoints/
 
-# Large or sensitive data files (optional, remove any you want to commit)
+# Private data and generated files
 *.dump
 *.pkl
 *.xlsx
+*.db
+*.joblib
+app.log
 
-.baby_retail_inventory.db
-.app.log
-.selected_forecast_model.joblib
-..streamlit/secrets.toml
+# Real sales results (keep demo files instead)
+artifacts/monthly_net_sales.csv
+artifacts/forecast_next_3_months.csv
+artifacts/category_forecast_next_3_months.csv
