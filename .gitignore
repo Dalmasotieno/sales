@@ -11,3 +11,8 @@ __pycache__/
 *.dump
 *.pkl
 *.xlsx
+
+.baby_retail_inventory.db
+.app.log
+.selected_forecast_model.joblib
+..streamlit/secrets.toml
